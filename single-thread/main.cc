@@ -115,7 +115,9 @@ double run_test(BTreeType *tree, std::vector<QueryType> querys, int thread_cnt) 
     }
     // #pragma omp barrier
     auto end = seconds();
-    cout << "notfound:" << notfount << endl;
+    if (notfount > 0) {
+        cout << "notfound:" << notfount << endl;
+    }
 
     return end - start; 
 }
@@ -193,7 +195,7 @@ int main(int argc, char ** argv) {
             preload(tree, size, pre, 1); 
             auto end = seconds();
             // cout << "preload time:" << double(end - start) << endl;
-            tree->statistics();
+            // tree->statistics();
             time = run_test(tree, querys, thread_cnt);  
             delete tree; 
             cout << "basetree" ;
@@ -215,17 +217,8 @@ int main(int argc, char ** argv) {
             auto start = seconds();
             preload(tree, size, pre, 1); 
             auto end = seconds();
+            cout << "hatreeLog";
             time = run_test(tree, querys, thread_cnt); 
-            // #pragma omp barrier
-            // #pragma omp parallel num_threads(2)
-            // {
-            //     if (omp_get_thread_num() == 0) {
-            //         time = run_test(tree, querys, thread_cnt); 
-            //     } else {
-            //         // tree->flush();
-            //     }
-            // }
-            // #pragma omp barrier
             delete tree; 
             break; 
         }

@@ -11,20 +11,17 @@
 #include <cstdio>
 #include <queue>
 #include <algorithm>
-#include <iostream>
 
 #include "pmallocator.h"
 #include "flush.h"
 
 #define eADR
-
-
-
-namespace hatreeLog {
-
+ 
 using std::string;
 using std::cout;
 using std::endl;
+
+namespace hatreeLog {
 
 const uint16_t INNER_NODE_SIZE = 30;
 const uint16_t SEARCH_K = 3;                     // Submit hotspot every 5 queries
@@ -38,7 +35,6 @@ const uint16_t XPLINE_SIZE = 256;
 
 struct LNode;
 struct INode;
-
 
 struct log_area {
     uint64_t index;
@@ -61,7 +57,6 @@ struct log_area {
     #endif
     }
 }__attribute__((aligned(XPLINE_SIZE)));
-
 
 struct LNode { // leaf nodes of btree, allocated on Optane
     // union state_t { // an 8 bytes states type
@@ -201,14 +196,18 @@ struct LNode { // leaf nodes of btree, allocated on Optane
             uint64_t free_sibver = (state_.get_sibver() + 1) % 2;
             sibs_[free_sibver] = (char *)galc->relative(split_node);
             // flush data back into PM
+        #ifndef eADR
             clwb(split_node, sizeof(LNode));
             clwb(&sibs_[free_sibver], sizeof(char *));
             mfence();
+        #endif
 
             new_state.unpack.sib_version = free_sibver;
             new_state.unpack.node_version += 1;
             state_.pack = new_state.pack;
+        #ifndef eADR
             clwb(this, 8);
+        #endif
 
             if(split_k > k) {
                 insert(k, (char *)v);
@@ -238,7 +237,9 @@ struct LNode { // leaf nodes of btree, allocated on Optane
         new_state.unpack.bitmap = state_.free(slotid);
         new_state.unpack.node_version += 1;
         state_.pack = new_state.pack;
+    #ifndef eADR
         clwb(this, 64);
+    #endif
         return true;
     }
 
@@ -247,7 +248,9 @@ struct LNode { // leaf nodes of btree, allocated on Optane
         for(int i = 0; i < NODE_SIZE; i++) {
             if (state_.read(i) && finger_prints_[i] == fp && recs_[i].key == k) {
                 recs_[i].val = (char *)v;
+            #ifndef eADR
                 clwb(&recs_[i], sizeof(Record));
+            #endif
                 return ;
             }
         }
@@ -258,14 +261,17 @@ struct LNode { // leaf nodes of btree, allocated on Optane
 
         finger_prints_[slotid] = finger_print(k);
         recs_[slotid] = {k, (char *) v};
+    #ifndef eADR
         clwb(&recs_[slotid], sizeof(Record));
         mfence();
-
+    #endif
         state_t new_state = state_;
         new_state.unpack.bitmap = state_.add(slotid);
         new_state.unpack.node_version += 1;
         state_.pack = new_state.pack;
+    #ifndef eADR
         clwb(this, 64);
+    #endif
     }
 
     // void print(string prefix) {
@@ -300,9 +306,10 @@ struct LNode { // leaf nodes of btree, allocated on Optane
                 new_state.unpack.bitmap = left->state_.add(slotid);
             }
         }
+    #ifndef eADR
         clwb(left->recs_, sizeof(Record) * NODE_SIZE);
         mfence();
-        
+    #endif
         // install sibling of right node to the left node
         uint64_t free_sibver = (left->state_.get_sibver() + 1) % 2;
         left->sibs_[free_sibver] = right->sibs_[right->state_.get_sibver()];
@@ -310,22 +317,25 @@ struct LNode { // leaf nodes of btree, allocated on Optane
         new_state.unpack.node_version += 1;
         new_state.unpack.sib_version = free_sibver;
         left->state_.pack = new_state.pack;
+    #ifndef eADR
         clwb(left, 64);
-
+    #endif
         galc->free(right);
     }
 }__attribute__((aligned(XPLINE_SIZE)));
 
 
 struct INode { // inner node, allocated on DRAM 
+    char * leftmost_ptr_; // represents the leftmost child of current node
+    char * sibling_ptr_;  // the sibling nodes of current 
     uint8_t count_;       // total record number in current node
     bool is_parent_of_leaf_;
     uint8_t turn_  = 0;
     //uint8_t search_cnt_ = 0;
     //uint8_t ocur_;
-    uint8_t bitmap_ = 0;
     uint8_t visit_ = 0;
-    uint8_t  dirty_ = 0;
+    uint8_t dirty_ = 0;
+    uint8_t bitmap_ = 0;
     char pend[2];      //pend to 16B
     
     
@@ -333,8 +343,8 @@ struct INode { // inner node, allocated on DRAM
     char finger_prints_[BUFFER_SIZE] = {0};
     //char pend[16];      //pend to 16B
     
-    char * sibling_ptr_;  // the sibling nodes of current 
-    char * leftmost_ptr_; // represents the leftmost child of current node
+    
+    
     Record recs_[INNER_NODE_SIZE];
 
     void insert(_key_t k, _value_t v) {
@@ -349,20 +359,18 @@ struct INode { // inner node, allocated on DRAM
         recs_[i] = {k, (char *) v};
         count_ += 1;
         if (count_ > INNER_NODE_SIZE - BUFFER_SIZE) {
-            uint8_t index = count_ - 1 + BUFFER_SIZE - INNER_NODE_SIZE;
-            bitmap_ &= ~(1UL << index);
-            // bitmap  &= ~(3ULL<<(count_ - 1 + BUFFER_SIZE - INNER_NODE_SIZE)*2);
-            if (dirty_ & (1UL << index) ) {
-                _key_t key = recs_[INNER_NODE_SIZE - BUFFER_SIZE + index].key;
-                _value_t val = (_value_t)recs_[INNER_NODE_SIZE - BUFFER_SIZE + index].val;
-                LNode* leaf = (LNode *)get_child(key);
-                leaf->update(key, val);
-                dirty_ &= ~(1UL << index);
+            size_t index = count_ - 1 + BUFFER_SIZE - INNER_NODE_SIZE; 
+            if (get(bitmap_, index) && get(dirty_, index)) {
+                _key_t key = recs_[INNER_NODE_SIZE - BUFFER_SIZE + i].key;
+                _value_t value = (_value_t)recs_[INNER_NODE_SIZE - BUFFER_SIZE + i].val;
+                LNode* leaf = (LNode*)get_child(key);
+                leaf->update(key, value);
             }
+            bitmap_  &= ~(1ULL<<(count_ - 1 + BUFFER_SIZE - INNER_NODE_SIZE));
         }
     }
 
-    INode (bool parent_of_leaf = false): leftmost_ptr_(NULL), sibling_ptr_(NULL), 
+    INode (bool parent_of_leaf = false): dirty_(0), leftmost_ptr_(NULL), sibling_ptr_(NULL), 
                                         count_(0), is_parent_of_leaf_(parent_of_leaf) {}
     
     ~INode() {
@@ -397,35 +405,32 @@ struct INode { // inner node, allocated on DRAM
             uint8_t i = BUFFER_SIZE - start;
             uint8_t index = std::max(turn_, start);
             while (i--) {
-                if ((visit_ & (1UL << index)) == 0) {
+                if (get(visit_, index) == false) {
+                    if (get(dirty_, index)) {
+                        _key_t k = recs_[INNER_NODE_SIZE - BUFFER_SIZE + index].key;
+                        _value_t v = (_value_t)recs_[INNER_NODE_SIZE - BUFFER_SIZE + index].val;
+                        LNode* leaf = (LNode*) get_child(k);
+                        leaf->update(k, v);
+                    }
                     finger_prints_[index] = fp;
                     recs_[INNER_MAX  - BUFFER_SIZE + index] = {key, (char *) val};
-                    if (dirty_ & (1UL << index)) {
-                        _key_t key = recs_[INNER_NODE_SIZE - BUFFER_SIZE + index].key;
-                        _value_t val = (_value_t)recs_[INNER_NODE_SIZE - BUFFER_SIZE + index].val;
-                        LNode* leaf = (LNode *)get_child(key);
-                        leaf->update(key, val);
-                        dirty_ &= ~(1UL << index);
-                    }
-
                     turn_ = (index + 1) % BUFFER_SIZE;
                     break;
                 } else {
-                    visit_ &= ~(1UL << index);
+                    unset(visit_, index);
                 }
                 index = std::max(start, (uint8_t)((index + 1) % BUFFER_SIZE));
             }
         } else {
             for (int i = start; i < BUFFER_SIZE; ++i) {
-                if ((bitmap_ & (1UL << i)) == 0) {
+                if (get(bitmap_, i) == false) {
                     finger_prints_[i] = fp;
                     recs_[INNER_MAX  - BUFFER_SIZE + i] = {key, (char *) val};
-                    bitmap_ |= 1UL << i;
+                    set(bitmap_, i);
                     break;
                 }
             }
         }
-
     }
 
     char * get_child(_key_t key) { // find the record whose key is the last one that is less equal to key
@@ -442,60 +447,17 @@ struct INode { // inner node, allocated on DRAM
             return recs_[i - 1].val;
     }
 
-    // TODO
-    void remove_dirty() {
-        for (size_t i = 0; i < BUFFER_SIZE; ++i) {
-            ;
-        }
-    }
-
-    char * pln_update_child(_key_t key, _value_t val, bool &hit) { // find the record whose key is the last one that is less equal to key
-        char fp = finger_print2(key);
-        __builtin_prefetch((&count_)+CACHE_LINE_SIZE, 0, 1);
-        __builtin_prefetch((&count_)+CACHE_LINE_SIZE*2, 0, 1);
-        for (int i = 0; i < BUFFER_SIZE; ++i) {
-            // if ( ((bitmap >> (2*i)) & 0x3) && finger_prints_[i] == fp  ) {
-            //     bitmap &= ~(3ULL<<(2*i));
-            // }
-            if ( ((bitmap_ >> i) & 0x1) && finger_prints_[i] == fp && key == recs_[i + INNER_NODE_SIZE - BUFFER_SIZE].key ) {
-                recs_[i + INNER_NODE_SIZE - BUFFER_SIZE].val = (char *)val;
-                hit = true;
-                dirty_ |= 1 << i; 
-                return nullptr;
-            } 
-        }
-        //bitmap &= 0ULL;
-        hit = false;
-
-        uint64_t i;
-        for(i = 0; i < count_; i++) {
-            if(recs_[i].key > key) {
-                break; 
-            }
-        }
-
-        if(i == 0)
-            return leftmost_ptr_;
-        else // recs_[i - 1].key <= key
-            return recs_[i - 1].val;
-    }
 
     char * pln_delete_child(_key_t key) { // find the record whose key is the last one that is less equal to key
         char fp = finger_print2(key);
         __builtin_prefetch((&count_)+CACHE_LINE_SIZE, 0, 1);
         __builtin_prefetch((&count_)+CACHE_LINE_SIZE*2, 0, 1);
         for (int i = 0; i < BUFFER_SIZE; ++i) {
-            // if ( ((bitmap >> (2*i)) & 0x3) && finger_prints_[i] == fp  ) {
-            //     bitmap &= ~(3ULL<<(2*i));
-            // }
-            if ( ((bitmap_ >> (i)) & 0x1) && finger_prints_[i] == fp && key == recs_[i + INNER_NODE_SIZE - BUFFER_SIZE].key ) {
-                bitmap_ &= ~(1ULL<<(i));
-                
-                //recs_[i + INNER_NODE_SIZE - BUFFER_SIZE].val = (char *)val;
+            if ( get(bitmap_, i) && finger_prints_[i] == fp && key == recs_[i + INNER_NODE_SIZE - BUFFER_SIZE].key ) {
+                unset(bitmap_, i);
                 break ;
             } 
         }
-        //bitmap &= 0ULL;
 
         uint64_t i;
         for(i = 0; i < count_; i++) {
@@ -510,47 +472,34 @@ struct INode { // inner node, allocated on DRAM
             return recs_[i - 1].val;
     }
 
-    char * pln_get_child(_key_t key, bool &hit, bool &dirty) { // find the record whose key is the last one that is less equal to key
+    void search_hotspot(_key_t key, bool &hit, size_t &index) {
         char fp = finger_print2(key);
         bool flag = count_ > (INNER_NODE_SIZE - BUFFER_SIZE);
         uint8_t start = flag ? count_ - (INNER_NODE_SIZE - BUFFER_SIZE) : 0;
         
-        __builtin_prefetch((&count_)+CACHE_LINE_SIZE, 0, 1);
-        uint64_t i = start;
+        size_t i = start;
         for (; i < BUFFER_SIZE; ++i) {
-            uint8_t state = ((bitmap_ >> (i)) & 0x1);
+            auto state = get(bitmap_, i);
             if ( state  && finger_prints_[i] == fp && recs_[i + INNER_MAX - BUFFER_SIZE].key == key) {
                 hit = true; 
-                if ((dirty_ & (1 << i))) {
-                    dirty = true;
+                index = i;
+                if (get(visit_, i) == false) {
+                    set(visit_, i);
                 }
-                if ((visit_ >> i) & 0x1) {
-                    visit_ |= 1ULL << i;
-                }
-                return recs_[i + INNER_MAX - BUFFER_SIZE].val;
+                return ;
             }
         }
         
         hit = false;
-        dirty = false;
-        for(i = 0; i < count_; i++) {
-            if(recs_[i].key > key) {
-                break;
-            }
-        }
-
-        if(i == 0)
-            return leftmost_ptr_;
-        else // recs_[i - 1].key <= key
-            return recs_[i - 1].val;
     }
+
+  
 
     bool store(_key_t k, _value_t v, _key_t & split_k, INode * & split_node) {
         if(count_ == INNER_MAX) {
-            split_node = new INode(is_parent_of_leaf_);
+               
 
-            // flush the dirty cache
-            remove_dirty();
+            split_node = new INode(is_parent_of_leaf_);
 
             uint64_t m = count_ / 2;
             split_k = recs_[m].key;
@@ -560,8 +509,6 @@ struct INode { // inner node, allocated on DRAM
             memcpy(&(split_node->recs_[0]), &(recs_[m + 1]), sizeof(Record) * (split_node->count_));
             count_ = m;
 
-            // set bitmap to 0
-            // bitmap &= 0U;
 
             // update sibling pointer
             split_node->sibling_ptr_ = sibling_ptr_;
@@ -618,14 +565,54 @@ struct INode { // inner node, allocated on DRAM
         return i;
     }
 
+    // void print(string prefix) {
+    //     printf("%s[(%u) ", prefix.c_str(), count());
+    //     for(int i = 0; i < count_; i++) {
+    //         printf("(%ld, %ld) ", recs_[i].key, (int64_t)recs_[i].val);
+    //     }
+    //     printf("]\n");
+
+    //     if(is_parent_of_leaf_ == false) {
+    //         INode * child = (INode *)leftmost_ptr_;
+    //         child->print(prefix + "    ");
+
+    //         for(int i = 0; i < count_; i++) {
+    //             INode * child = (INode *)recs_[i].val;
+    //             child->print(prefix + "    ");
+    //         }
+    //     } else {
+    //         LNode * child = (LNode *)leftmost_ptr_;
+    //         child->print(prefix + "    ");
+
+    //         for(int i = 0; i < count_; i++) {
+    //             LNode * child = (LNode *)recs_[i].val;
+    //             child->print(prefix + "    ");
+    //         }
+    //     }
+    // }
 
     int8_t count() {
         return count_;
     }
 
     static void merge(INode * left, INode * right, _key_t merge_key) {
-        left->remove_dirty();
-        right->remove_dirty();
+        // flush dirty entries
+        for (size_t i = 0; i < BUFFER_SIZE; ++i) {
+            if (get(left->bitmap_, i) && get(left->dirty_, i)) {
+                _key_t key = left->recs_[INNER_NODE_SIZE - BUFFER_SIZE + i].key;
+                _value_t value = (_value_t)left->recs_[INNER_NODE_SIZE - BUFFER_SIZE + i].val;
+                LNode* leaf = (LNode*)left->get_child(key);
+                leaf->update(key, value);
+            }
+        }
+        for (size_t i = 0; i < BUFFER_SIZE; ++i) {
+            if (get(right->bitmap_, i) && get(right->dirty_, i)) {
+                _key_t key = right->recs_[INNER_NODE_SIZE - BUFFER_SIZE + i].key;
+                _value_t value = (_value_t)right->recs_[INNER_NODE_SIZE - BUFFER_SIZE + i].val;
+                LNode* leaf = (LNode*)right->get_child(key);
+                leaf->update(key, value);
+            }
+        }
 
         left->recs_[left->count_++] = {merge_key, right->leftmost_ptr_}; 
         for(int i = 0; i < right->count_; i++) {
@@ -651,10 +638,10 @@ class hatreeLog {
                 //init log_
                 log_ = (log_area *) galc->malloc(sizeof(log_area));
                 log_->index = 0;
-                // cout << leaf << endl;
-                // cout << &(log_->log_data) << endl;
+            #ifndef eADR
                 clwb(log_, 8);
-
+            #endif
+                cout << "the size of log area is " << sizeof(log_area) / 1024.0 /1024 <<  "MB" << endl;
             } else {
                 galc = new PMAllocator(path.c_str(), true, "hatreeLog");
                 LNode * leaf = (LNode *)galc->get_root(sizeof(LNode));
@@ -663,56 +650,47 @@ class hatreeLog {
         }
 
         ~hatreeLog() {
-            // std::cout << "hit cnt:" << hit_cnt_ << " " << dum_ << std::endl;
+            //std::cout << "hit cnt:" << hit_cnt_ << std::endl;
             delete root_;
             delete galc;
+            delete log_;
         }
 
         bool find(_key_t key, _value_t &val) {
-            INode * cur = root_;
-            bool hit = false, dirty = false;
-            while(!cur->is_parent_of_leaf_) { // no prefetch here
-                char * child_ptr = cur->get_child(key);
-                cur = (INode *)child_ptr;
+            search_cnt_ = (search_cnt_ + 1) % SEARCH_K;
+
+            //get the pln node
+            INode * pln = root_;
+            while(!pln->is_parent_of_leaf_) { // no prefetch here
+                char * child_ptr = pln->get_child(key);
+                pln = (INode *)child_ptr;
             }
-            //cout << "test1" << endl;
-            LNode* leaf = (LNode * )cur->pln_get_child(key, hit, dirty);
+
+            //prefetch the pln node
+            __builtin_prefetch(&(pln->count_), 0, 1);
+            __builtin_prefetch(&(pln->count_)+CACHE_LINE_SIZE, 0, 1);
+            __builtin_prefetch(&(pln->count_)+CACHE_LINE_SIZE*2, 0, 1);
+
+            //search pln cache
+            size_t index = 0;
+            bool hit = false;
+            pln->search_hotspot(key, hit, index);
+
 
             if (hit) {
-                // hit_cnt_++;
-                //dum_++;
-                val = (_value_t) leaf;
-                if (dirty) {
-                    //hit_cnt_++;
-                    //dum_ += log_buf_.index;
-                    log_->add_entry(log_buf_);
-                    log_buf_.index = 0;
-                }
+                val = (_value_t)pln->recs_[index + INNER_NODE_SIZE - BUFFER_SIZE].val;
             } else {
+                LNode* leaf = (LNode*) pln->get_child(key);
                 val = (_value_t) leaf->get_child(key);
-            }
-            
-            //cout << "test2" << endl;
-            if (search_cnt_ == SEARCH_K) {
-                if (!hit) {
-                    cur->insert_hotspot(key, val);
+                if (search_cnt_ == 0) {
+                    pln->insert_hotspot(key, val);
                 }
-                search_cnt_ = 0;
-            } else {
-                search_cnt_++;
             }
-            // search_cnt_++;
-            // if (search_cnt_ % SEARCH_K == 0 && !hit) {
-            //     
-            // }
             
-            /*
-            LNode * leaf = (LNode * )cur->get_child(key);
-
-            val = (_value_t) leaf->get_child(key);
-            */
-
-            return true;
+            if (val) 
+                return true;
+            else 
+                return false;
         }
 
         void insert(_key_t key, _value_t val) {
@@ -731,29 +709,49 @@ class hatreeLog {
         }
         
         bool update(_key_t key, _value_t value) { // TODO: not implemented
-            INode * cur = root_;
-            while(!cur->is_parent_of_leaf_) { // no prefetch here
-                char * child_ptr = cur->get_child(key);
-                cur = (INode *)child_ptr;
+            search_cnt_ = (search_cnt_ + 1) % SEARCH_K;
+            
+            INode * pln = root_;
+            while(!pln->is_parent_of_leaf_) { // no prefetch here
+                char * child_ptr = pln->get_child(key);
+                pln = (INode *)child_ptr;
             }
 
-            LNode * leaf = nullptr;
+            //prefetch the pln node
+            __builtin_prefetch(&(pln->count_), 0, 1);
+            __builtin_prefetch(&(pln->count_)+CACHE_LINE_SIZE, 0, 1);
+            __builtin_prefetch(&(pln->count_)+CACHE_LINE_SIZE*2, 0, 1);
+
+            //search pln cache
+            size_t index = 0;
             bool hit = false;
-            if ( 1) {
-                leaf = (LNode * )cur->pln_update_child(key, value, hit);
+            pln->search_hotspot(key, hit, index);
+
+            if (hit) {
+                pln->recs_[index + INNER_NODE_SIZE - BUFFER_SIZE].val = (char*)value;
+                if (update_with_log_) {
+                    if (get(pln->dirty_, index) == false) {
+                        set(pln->dirty_, index);
+                    }
+                    add_log(key, value);
+                } else {
+                    // update the leaf node
+                    LNode * leaf = (LNode * )pln->get_child(key);
+                    leaf->update(key, value);
+                }
             } else {
-                leaf = (LNode * )cur->get_child(key);
+                // update the leaf node
+                LNode * leaf = (LNode * )pln->get_child(key);
+                leaf->update(key, value);
+                if (search_cnt_ == 0) {
+                    pln->insert_hotspot(key, value);
+                }
+            }
+
+            if (!update_with_log_) {
+                flush_one_node();
             }
             
-            if (hit) {
-                if (log_->index == LOG_ENTRY_SIZE) {
-                    log_->add_entry(log_buf_);
-                    log_buf_.index = 0;
-                } 
-                log_buf_.recs[log_buf_.index++] = Record(key, (char *)value);
-            } else {
-                leaf->update(key, value);
-            }
 
             return true;
         }
@@ -814,20 +812,38 @@ class hatreeLog {
         // void printAll() {
         //     root_->print(string(""));
         // }
-        
-        // flush dirty enties in pln cache
-        void flush() {
-            INode* cur_node = root_;
-            while (cur_node->is_parent_of_leaf_ == false) {
-                cur_node = (INode *)cur_node->leftmost_ptr_;
-            }
-            while (cur_node != nullptr) {
-                cur_node->remove_dirty();
-                cur_node = (INode *)cur_node->sibling_ptr_;
+
+    private:
+        void add_log(_key_t key, _value_t value) {
+            log_->add_entry({key, (char*)value});
+            if (log_->index == LOG_ENTRY_SIZE) {
+                update_with_log_ = false;
+                cur_node_ = root_;
+                while(!cur_node_->is_parent_of_leaf_) { // no prefetch here
+                    cur_node_ = (INode*)cur_node_->leftmost_ptr_;
+                }
             }
         }
 
-    private:
+        void flush_one_node() {
+            if (cur_node_ == nullptr) {
+                update_with_log_ = true;
+                log_->index = 0;
+            #ifndef eADR
+                clwb(&(log->index), 8);
+            #endif
+            } else {
+                for (size_t i = 0; i < BUFFER_SIZE; ++i) {
+                    if (get(cur_node_->bitmap_, i) && get(cur_node_->dirty_, i)) {
+                        _key_t key = cur_node_->recs_[INNER_NODE_SIZE - BUFFER_SIZE + i].key;
+                        _value_t value = (_value_t)cur_node_->recs_[INNER_NODE_SIZE - BUFFER_SIZE + i].val;
+                        LNode* leaf = (LNode*) cur_node_->get_child(key);
+                        leaf->update(key, value);
+                    }
+                }
+            }
+        }
+
         bool insert_recursive(INode * n, _key_t k, _value_t v, _key_t &split_k, INode * &split_node, bool insert_into_leaf) {
             if(insert_into_leaf) {
                 return ((LNode *)n)->store(k, v, split_k, split_node);
@@ -901,13 +917,11 @@ class hatreeLog {
 
     private:
         INode * root_;
+        INode * cur_node_;
         log_area *log_;
-
-        //uint16_t log_index_ = 0;
-        //uint16_t  global_version_ = 0;
+        bool update_with_log_ = true;
         uint8_t  search_cnt_ = 0;
         uint32_t   hit_cnt_ = 0;
-        uint64_t dum_ = 0;
 };
 
 } // namespace hatreeLog

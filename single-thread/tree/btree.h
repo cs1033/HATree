@@ -16,6 +16,8 @@
 
 #include "pmallocator.h"
 #include "flush.h"
+
+#define eADR
  
 using std::string;
 using std::cout ; 
@@ -141,15 +143,17 @@ struct LNode { // leaf nodes of btree, allocated on Optane
             uint64_t free_sibver = (state_.get_sibver() + 1) % 2;
             sibs_[free_sibver] = (char *)galc->relative(split_node);
             // flush data back into PM
+        #ifndef eADR
             clwb(split_node, sizeof(LNode));
             clwb(&sibs_[free_sibver], sizeof(char *));
             mfence();
-
+        #endif
             new_state.unpack.sib_version = free_sibver;
             //new_state.unpack.node_version += 1;
             state_.pack = new_state.pack;
+        #ifndef eADR
             clwb(this, 8);
-
+        #endif
             if(split_k > k) {
                 insert(k, (char *)v);
             } else {
@@ -178,7 +182,9 @@ struct LNode { // leaf nodes of btree, allocated on Optane
         new_state.unpack.bitmap = state_.free(slotid);
         //new_state.unpack.node_version += 1;
         state_.pack = new_state.pack;
+    #ifndef eADR
         clwb(this, 64);
+    #endif
         return true;
     }
 
@@ -187,7 +193,9 @@ struct LNode { // leaf nodes of btree, allocated on Optane
         for(int i = 0; i < NODE_SIZE; i++) {
             if (state_.read(i) && finger_prints_[i] == fp && recs_[i].key == k) {
                 recs_[i].val = (char *)v;
+            #ifndef eADR
                 clwb(&recs_[i], sizeof(Record));
+            #endif
                 return ;
             }
         }
@@ -198,14 +206,17 @@ struct LNode { // leaf nodes of btree, allocated on Optane
 
         finger_prints_[slotid] = finger_print(k);
         recs_[slotid] = {k, (char *) v};
+    #ifndef eADR
         clwb(&recs_[slotid], sizeof(Record));
         mfence();
-
+    #endif
         state_t new_state = state_;
         new_state.unpack.bitmap = state_.add(slotid);
         //new_state.unpack.node_version += 1;
         state_.pack = new_state.pack;
+    #ifndef eADR
         clwb(this, 64);
+    #endif
     }
 
     // void print(string prefix) {
@@ -240,9 +251,11 @@ struct LNode { // leaf nodes of btree, allocated on Optane
                 new_state.unpack.bitmap = left->state_.add(slotid);
             }
         }
+    #ifndef eADR
         clwb(left->recs_, sizeof(Record) * NODE_SIZE);
         mfence();
-        
+    #endif
+
         // install sibling of right node to the left node
         uint64_t free_sibver = (left->state_.get_sibver() + 1) % 2;
         left->sibs_[free_sibver] = right->sibs_[right->state_.get_sibver()];
@@ -250,8 +263,9 @@ struct LNode { // leaf nodes of btree, allocated on Optane
         //new_state.unpack.node_version += 1;
         new_state.unpack.sib_version = free_sibver;
         left->state_.pack = new_state.pack;
+    #ifndef eADR
         clwb(left, 64);
-
+    #endif
         galc->free(right);
     }
 };

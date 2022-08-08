@@ -16,8 +16,8 @@
 #define LE_DATA              0
 #define LE_COMMIT            1
 
-#define POOLSIZE 5 
-#define LOADSCALE 9  
+#define POOLSIZE 10 
+#define LOADSCALE 100 
 
 #define KILO 1024
 #define MILLION (KILO * KILO)
@@ -48,7 +48,7 @@ static inline void set(T& state, size_t index) {
 }
 
 template <typename T>
-static inline void unset(T state, size_t index) {
+static inline void unset(T& state, size_t index) {
     state &= ~((T)1 << index);
 }
 
