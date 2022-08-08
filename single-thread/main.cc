@@ -16,10 +16,8 @@
  
 #include "common.h"
 #include "btree.h" 
-#include "robtree.h"
-#include "fptree.h"
-#include "fastfair.h"
-#include "rutree.h"
+#include "hatree.h"
+#include "hatreeLog.h"
 // #include "rutree.h"
 
 
@@ -189,17 +187,6 @@ int main(int argc, char ** argv) {
 
     switch (opt_testid) { 
         case 1: {
-            fast::btree* tree = new fast::btree("/mnt/pmem1/lgc/fastfair.pool", false);
-            auto start = seconds();
-            preload(tree, size, pre, 1); 
-            auto end = seconds();
-            // cout << "preload time:" << double(end - start) << endl;
-            time = run_test(tree, querys, thread_cnt); 
-            cout << "fast" ;
-            delete tree; 
-            break; 
-        }
-        case 2: {
             //cout << "btree" << endl;
             btree::btree* tree = new btree::btree("/mnt/pmem/lgc/basetree.pool", false);
             auto start = seconds();
@@ -212,8 +199,8 @@ int main(int argc, char ** argv) {
             cout << "basetree" ;
             break; 
         }   
-        case 3: {
-            robtree::robtree* tree = new robtree::robtree("/mnt/pmem1/lgc/robtree.pool", false);
+        case 2: {
+            hatree::hatree* tree = new hatree::hatree("/mnt/pmem/lgc/hatree.pool", false);
             auto start = seconds();
             preload(tree, size, pre, 1); 
             auto end = seconds();
@@ -223,8 +210,8 @@ int main(int argc, char ** argv) {
             cout << "hatree";
             break; 
         }    
-        case 4: {
-            rutree::rutree* tree = new rutree::rutree("/mnt/pmem1/lgc/rutree.pool", false);
+        case 3: {
+            hatreeLog::hatreeLog* tree = new hatreeLog::hatreeLog("/mnt/pmem/lgc/hatreeLog.pool", false);
             auto start = seconds();
             preload(tree, size, pre, 1); 
             auto end = seconds();
@@ -240,7 +227,6 @@ int main(int argc, char ** argv) {
             // }
             // #pragma omp barrier
             delete tree; 
-            cout << "rutree";
             break; 
         }
         default:

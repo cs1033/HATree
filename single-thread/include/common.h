@@ -37,6 +37,22 @@ struct Record {
     }
 };
 
+template <typename T>
+static inline bool get(T state, size_t index) {
+    return state & ((T)1 << index);
+}
+
+template <typename T>
+static inline void set(T& state, size_t index) {
+    state |= (T)1 << index;
+}
+
+template <typename T>
+static inline void unset(T state, size_t index) {
+    state &= ~((T)1 << index);
+}
+
+
 enum OperationType {READ = 0, INSERT, UPDATE, DELETE};
 
 struct QueryType {
