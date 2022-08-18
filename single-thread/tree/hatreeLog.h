@@ -867,6 +867,7 @@ class hatreeLog {
             else {
                 INode * child = nullptr; 
                 if ((INode *)n->is_parent_of_leaf_ ) {
+                    
                     child = (INode *) n->pln_delete_child(k);
                 } else {
                     child = (INode *) n->get_child(k);
@@ -891,11 +892,15 @@ class hatreeLog {
                         // merge with left node
                         _key_t merge_key = n->recs_[pos - 1].key;
                         n->remove(merge_key);
-                        if(n->is_parent_of_leaf_)
+                        if(n->is_parent_of_leaf_) 
                             LNode::merge((LNode *)leftsib, (LNode *)child, merge_key);
-                        else
+                        else {
+                            if (!update_with_log_ && cur_node_ == child) {
+                                flush_one_node();
+                            }
                             INode::merge(leftsib, child, merge_key);
-                        
+                        }
+
                         return n->count() <= INNER_UNDERFLOW_CARD;
                     } else if (rightsib != NULL && cnt + rcnt < INNER_MAX) {
                         // merge with right node
@@ -903,8 +908,12 @@ class hatreeLog {
                         n->remove(merge_key);
                         if(n->is_parent_of_leaf_)
                             LNode::merge((LNode *)child, (LNode *)rightsib, merge_key);
-                        else 
+                        else  {
+                            if (!update_with_log_ && cur_node_ == rightsib) {
+                                flush_one_node();
+                            }
                             INode::merge(child, rightsib, merge_key);
+                        }
                         
                         return n->count() <= INNER_UNDERFLOW_CARD;
                     }
