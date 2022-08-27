@@ -1,8 +1,3 @@
-/*
-    Read Optimized B+-tree (hatree)
-    Copyright(c) Luo Yongping All rights reserved!
-*/
-
 #pragma once
 
 #include <cstdint>
@@ -24,7 +19,7 @@ using std::endl;
 namespace hatree {
 
 const uint16_t INNER_NODE_SIZE = 30;
-const uint16_t SEARCH_K = 3;                     // Submit hotspot every 5 queries
+const uint16_t SEARCH_K = 3;                     // Submit hotspot every 3 queries
 const uint16_t NODE_SIZE = 14;                  // INode size 256B
 const int INNER_UNDERFLOW_CARD = INNER_NODE_SIZE / 2;
 const int LEAF_UNDERFLOW_CARD = NODE_SIZE / 3;  // Underflow limit

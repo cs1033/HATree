@@ -1,8 +1,3 @@
-/*
-    Read Optimized B+-tree (btree)
-    Copyright(c) Luo Yongping All rights reserved!
-*/
-
 #ifndef __btree__
 #define __btree__
 

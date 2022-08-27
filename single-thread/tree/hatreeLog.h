@@ -1,8 +1,3 @@
-/*
-    Read Optimized B+-tree (hatreeLog)
-    Copyright(c) Luo Yongping All rights reserved!
-*/
-
 #pragma once
 
 #include <cstdint>
