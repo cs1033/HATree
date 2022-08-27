@@ -124,70 +124,17 @@ void gen_workload(int64_t *arr, int64_t scale, QueryType * querys, WorkloadType 
     }
 }
 
-void gen_workload_hotspot(int64_t *arr, int64_t scale, QueryType * querys, WorkloadType w, int ocur) {
-    cout << "hotspot" << endl;
-    std::mt19937 gen(getRandom());
-    int64_t time = scale / 100;
-    std::uniform_int_distribution<int64_t> idx1_dist(0, time*99);
-    zipfian_int_distribution<int64_t> idx2_dist(0, time, w.skewness);
-    zipfian_int_distribution<int64_t> idx3_dist(0, scale, w.skewness);
-    OperationGenerator op_gen(w);
+
  
-    for(int i = 0; i < w.operations; i++)  {
-        int base = 0; 
-        if (i % (time * 5) == 0)  
-            base = idx1_dist(gen);  
-        
-        OperationType op = op_gen.next();
-        int choose = idx1_dist(gen) % 10 ;
-        if (choose < ocur)  {
-            choose = ZIPFIAN;
-        } else {
-            choose = RAND;
-        }
-        int idx = (choose == RAND ? idx3_dist(gen) : base + idx2_dist(gen));
-        // for insert operations, we should make sure the key does not exist in the dataset
-        int64_t key = (op == OperationType::INSERT ? arr[idx] + getRandom(): arr[idx]); 
-
-        querys[i] = {op, key};
-        
-    }
-} 
- 
-// void gen_workload(int64_t *arr, int64_t scale, QueryType * querys, WorkloadType w) {
-//     std::mt19937 gen(getRandom());
-//     std::uniform_int_distribution<int64_t> idx1_dist(0, scale*9/10);
-//     zipfian_int_distribution<int64_t> idx2_dist(0, scale/10, w.skewness);
-//     OperationGenerator op_gen(w);
-
-//     int cycle[1001];
-
-//     for (int i = 0; i < 1001; ++i) {
-//         cycle[i] = idx1_dist(gen);
-//     }
-
-//     for(int i = 0; i * MILLION < w.operations; i++) {
-//         int base = idx1_dist(gen);
-//         for (int j = 0; j < MILLION; ++j) {
-//              OperationType op = op_gen.next();
-//             int idx = cycle[idx1_dist(gen) % 1001];
-//             //int idx = (w.dist == RAND ? idx1_dist(gen) : base + idx2_dist(gen));
-//             // for insert operations, we should make sure the key does not exist in the dataset
-//             int64_t key = (op == OperationType::INSERT ? arr[idx] + getRandom(): arr[idx]); 
-//             querys[i*MILLION + j] = {op, key};
-//         }
-//     }
-// }
 
 int main(int argc, char ** argv) { 
     static const bool DATASET_RANDOM =  true;
     bool opt_zipfian  = false;
     WorkloadType w;
     std::string workloadName = "workload.txt";
-    int ocur = 0;
     int datasize = LOADSCALE;
 
-    static const char * optstr = "L:l:p:P:n:r:i:u:d:o:s:hz"; 
+    static const char * optstr = "L:l:n:r:i:u:d:o:s:hz"; 
     opterr = 0;
     char opt;
     while((opt = getopt(argc, argv, optstr)) != -1) {
@@ -195,10 +142,6 @@ int main(int argc, char ** argv) {
         case 'l':
         case 'L':
             datasize = atoi(optarg);
-            break;
-        case 'p':
-        case 'P':
-            ocur = atoi(optarg);
             break;
         case 'n':
             workloadName = optarg;
@@ -230,7 +173,8 @@ int main(int argc, char ** argv) {
             cout << "USAGE: "<< argv[0] << "[option]" << endl;
             cout << "\t -h: " << "Print the USAGE" << endl;
             cout << "\t -z: " << "Use zipfian distribution (Not specified: random distribution)" << endl;
-            cout << "\t -o: " << "The number of operations" << endl;
+            cout << "\t -o: " << "The number of operations(10^6)" << endl;
+            cout << "\t -n: " << "The filename of workload" << endl;
             cout << "\t -s: " << "The skewness of query workload(0 - 1)" << endl;
             cout << "\t -r: " << "Read ratio" << endl;
             cout << "\t -i: " << "Insert ratio" << endl;
@@ -275,11 +219,9 @@ int main(int argc, char ** argv) {
     }
  
     QueryType * querys = new QueryType[w.operations];
-    if (ocur != 0) {
-        gen_workload_hotspot(arr, scale, querys, w, ocur);
-    } else {
-        gen_workload(arr, scale, querys, w);
-    }
+
+    gen_workload(arr, scale, querys, w);
+
     
     ofstream fout(workloadName.c_str());
     for(int i = 0; i < w.operations; i++) {
